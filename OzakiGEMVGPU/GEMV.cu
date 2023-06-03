@@ -943,21 +943,6 @@ counter++;
 
 }
 
-void print_float_Vector( float C[] ,int n){
-
-printf("\nPrint float Vector\n");
-
-for (int j =0;j<n;j++){
-
-
-printf("%f ",C[j]);
-
-
-
-}
-printf("\n\n\n");
-
-}
 
 void print_half_Vector(int n , SplitVector V[] ,int numSplit){
 
@@ -989,43 +974,58 @@ __global__ void hello(){
 
 
 
+__global__ void init_fuck_nvidia_shine(SplitMatrix *devSplitMatrix,
+SplitVector *devSplitVector,int m,int n,int numSplitArray,double *TMP_MAT,double *TMB_VEC){
+ int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
+for(int i=0;i<numSplitArray;i++){
+  if(i < m*n){
+devSplitMatrix[idx].NumCol=m;
+devSplitMatrix[idx].NumRow=n;
+devSplitMatrix[idx].Scaling=19;
+printf("\nHELLO FUCK SHINE");
 
+}
+if(i <n){
+devSplitVector[idx].NumRow=n;
+devSplitVector[idx].Scaling=1;
 
-__global__ void Max_Sequential_Addressing_Shared(double* data, int data_size,
-double *max){
-
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-    extern __shared__ double  sdata[];
-
-    if (idx < data_size){
-
-        /*copy to shared memory*/
-        sdata[threadIdx.x] = data[idx];
-        __syncthreads();
-
-        for(int stride=blockDim.x/2; stride > 0; stride /= 2) {
-            if (threadIdx.x < stride) {
-               double lhs = sdata[threadIdx.x];
-               double rhs = sdata[threadIdx.x + stride];
-                sdata[threadIdx.x] =  fabs(lhs) <  fabs(rhs) ? rhs : lhs;
-            }
-             __syncthreads();
-        }
-
-
-    }
-
- __syncthreads();
-    if (idx == 0){
-      sdata[0] = sdata[0];
-    }
- __syncthreads();
-  *max = sdata[0];
-  __syncthreads();
-  //printf("\n max in find max : %lf \n",*max);
+}
+}
 }
 
+
+__device__ double Max_Sequential_Addressing_Shared(double* data, int data_size,double *max){
+
+
+
+ int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    __shared__ double sdata[MAX_CUDA_THREADS_PER_BLOCK];
+    if (idx < data_size/2){
+
+        /*copy to shared memory*/
+        sdata[idx] = data[idx];
+        __syncthreads();
+
+
+          int  stride = (data_size/2);
+        for(int stride = data_size; stride == 0 ; stride--) {
+                if(sdata[idx] < sdata[idx  + stride]){ 
+                   sdata[idx] =  sdata[idx  + stride];
+                
+            }
+            __syncthreads();
+
+        }
+    }
+
+
+       __syncthreads();
+   printf("sdata %lf",sdata[0]);
+    printf("max %lf",*max);
+    return sdata[0];
+
+}
 
 
 
@@ -1033,66 +1033,108 @@ double *max){
 ///////////////////////////////////////////////////////////////////////////////////global////////////////////////////////////////////////////
 
 
-__global__ void dev_Mat2SplitMat(double rho,double *max,double *dev_Matrix,
-SplitMatrix *devSplitMatrix,
+__global__ void dev_Mat2SplitMat(double *dev_Matrix,SplitMatrix *devSplitMatrix,
 int numCol, int numRow,int numSplitArray,double *d_only_TMPMat){
 //printf("\n\n in Mat numSplit %d \n\n",numSplitArray);
  int j = blockDim.x * blockIdx.x + threadIdx.x;
 
 
 
-//printf("\nnumSplit %d and max = %lf\n",numSplitArray,*max);
-double tau,mu,sigma,tmp;
+printf(" Split Mat %d ",numSplitArray);
+double rho,tau,mu,sigma,max;
 
-//printf("\n rho = %lf \n",rho);
+rho = ceil((53-(53-log2(2.*sqrt(numSplitArray))))/2);
 
- //printf("Vec Max : %lf\n",*max);
-mu = fabs(*max);
-//printf("\n mu = %lf",mu);
+
+for (int i =0;i<numSplitArray;i++){
+  printf("dev mat :%lf",dev_Matrix[i]);
+Max_Sequential_Addressing_Shared(dev_Matrix,(numCol*numRow),&max);
+   __syncthreads();
+printf("\nmax:%lf \n",max);
+
+
+mu = fabs(max);
+printf("mu %lf \n",mu);
 tau =ceil(log2(mu));
-//printf("\n tau = %lf",tau);
-devSplitMatrix->Scaling=tau;
-//printf("\n devSplitMat ->Scaling = %lf\n ",devSplitMatrix->Scaling);
-tmp=(*max);
-sigma = pow(2,(rho+tau));
-//printf("\n sigma = %lf",sigma);
+printf("tau: %lf \n ",tau);
+sigma =pow(2, rho+tau);
+printf("sigma: %lf \n",sigma);
 
     if(j<numRow*numCol){
-    d_only_TMPMat[j]=(double)(dev_Matrix[j]+sigma);
-       __syncthreads();
-    d_only_TMPMat[j]=(double)(dev_Matrix[j]-sigma);
-       __syncthreads();
-    //printf("\n d_only_TMPVec = %lf",d_only_TMPMat[j]);
-    //printf("\n dev_Vec = %lf",dev_Matrix[j]);
-    dev_Matrix[j] = ((dev_Matrix[j]-d_only_TMPMat[j]));
-       __syncthreads();
-    devSplitMatrix->data[j]=(half)((double)((pow(2,(-1*tau)))*d_only_TMPMat[j]));
-       __syncthreads();
-       // printf("\n dev_Vec = %lf",dev_Matrix[j]);
-        //for(int k = 0;k<numRow*numRow;k++){
-    // printf("\n  d_only_Mat>data[%d] = %f",k,(double)(d_only_TMPMat[k]));  
-   // printf("\n               devMat[%d] = %f",k,(double)(dev_Matrix[k]));  
-   //  printf("\n                      devSplitMat->data[%d] = %f",k,(half)(devSplitMatrix->data[k]));
-    // }
-    }
-    __syncthreads();
+    devSplitMatrix[i].Scaling=(double)tau;
+    printf("devSplitMatrix :%lf\n",(float)devSplitMatrix[i].Scaling);
+    d_only_TMPMat[j]=(double)((dev_Matrix[j]+sigma)-sigma);
+    printf("d_only_TMPMat :%lf\n",(double)d_only_TMPMat[j]);
+    dev_Matrix[j]=(double)(dev_Matrix[j]-d_only_TMPMat[j]);
+     printf("dev_Matrix :%lf\n",(double)dev_Matrix[j]);
+    devSplitMatrix[i].data[j]=(half)((double)((pow(2,-tau))*d_only_TMPMat[j]));
+      printf("devSplitMatrixdata1 :%lf\n",(float)devSplitMatrix[i].data[j]);
 
+     __syncthreads();
+    
 
      
+  }
 
 
       //printf("\n in After kernel 11111111111111 %lf\n",devSplitMatrix[1].Scaling);
+}
+/*
+devSplitMatrix[0].data[j]=191;
+devSplitMatrix[1].data[j]=810;
+
+numSplitArray = 10121;
+*/
+}
+
+
+
+
+__global__ void dev_Vec2SplitVec( double *dev_Vector,SplitVector *devSplitVector,
+int numRow,int numSplitArray ,double *d_only_TMPVec ){//既存手法
+ int j = blockDim.x * blockIdx.x + threadIdx.x;
+
+
+printf(" Split Vec %d ",numSplitArray);
+
+
+double rho,tau,mu,sigma,max;
+
+rho = ceil((53-(53-log2(2.*sqrt(numSplitArray))))/2);
+
+for (int i =0;i<numSplitArray;i++){
+
+Max_Sequential_Addressing_Shared(dev_Vector,numRow,&max);
+ __syncthreads();
+mu = fabs(max);
+tau =ceil(log2(mu));
+devSplitVector[i].Scaling=tau;
+
+    if(j<numRow){
+    sigma =pow(2,rho+max);
+    d_only_TMPVec[j]=(double)((dev_Vector[j]+sigma)-sigma);
+    dev_Vector[j]=(double)(dev_Vector[j]-d_only_TMPVec[j]);
+    devSplitVector[i].data[j]=(half)((double)((pow(2,-tau))*d_only_TMPVec[j]));
+    }
+    __syncthreads();
+    printf("\n in kernel Split Vec Scale: %lf\n",devSplitVector[i].Scaling);  
+
+
+}
+
+
+
+
 }
 
 
 
 
 
+__global__ void dev_Vec2SplitVecPackMat(){//提案手法
 
-
-
-
-
+  
+}
 //////////////////////////////////////////////////////////////////Function4OzakiScheme/////////////////////////////////////////////////////////////////////////
 
 
@@ -1103,15 +1145,30 @@ sigma = pow(2,(rho+tau));
 
 
 
-void ozaki_Split_fp64tofp16_Mat(double *d_Matrix ,
+
+
+void setSplitVec4Vec(){
+
+
+}
+
+void setSplitMat4Mat(){
+
+
+
+}
+
+
+
+
+
+void ozaki_Split_fp64tofp16_Mat(double *d_A ,
 SplitMatrix  *d_SplitMat,
 int numCol,int numRow,int numSplitArray,double *TMP_MAT){
-  //printf("\n in the Vec \n");
-dim3 Grid(numRow*numCol);
-dim3  Block(numRow*numCol);
-
- if(2000 < numRow*numCol){
- if((numRow ) % BLOCK == 0){
+dim3 Grid(1,1);
+dim3  Block(1,1);
+ if(16<numCol && 16 < numRow){
+ if((numRow * numCol ) % BLOCK == 0){
  dim3  Block(BLOCK,BLOCK);
  dim3 Grid(int(numCol*numRow)/BLOCK,int(numCol*numRow)/BLOCK);
 }
@@ -1121,70 +1178,8 @@ else{
 }
  }
 
-double *d_max;
-cudaMalloc((void**)&d_max, sizeof(double));
-double rho = ceil((log2(53)-log2(23)-log2(numSplitArray))/2);
-for(int i=0;i<numSplitArray;i++){
-
-Max_Sequential_Addressing_Shared<<<1, numRow*numCol,
-     numRow*numCol * sizeof(double)>>>(d_Matrix,numRow*numCol,d_max);
-
-
-//printf("\n \n Max_Sequential_Addressing_Shared END \n");
-cudaDeviceSynchronize();
- //cudaMemcpy(&max, d_max, sizeof(double), cudaMemcpyDeviceToHost);
- //printf("\n in Vec max :%lf\n",max);
-dev_Mat2SplitMat<<<1, numRow*numCol,
-     numRow*numCol* sizeof(double)>>>(rho,d_max,d_Matrix,&d_SplitMat[i],numCol,numRow, 
-numSplitArray,TMP_MAT);
-//printf("\n\n  dev_Vec2SplitVec EDN \n");
-cudaDeviceSynchronize();
-
-}
-
-
-} 
-
-__global__ void dev_Vec2SplitVec(double rho ,double *max, double *dev_Vector,
-SplitVector *devSplitVector,
-int numRow,int numSplitArray ,double *d_only_TMPVec ){//既存手法
-int j = blockDim.x * blockIdx.x + threadIdx.x;
-
-//printf("\nnumSplit %d and max = %lf\n",numSplitArray,*max);
-double tau,mu,sigma,tmp;
-
-//printf("\n rho = %lf \n",rho);
-
-//printf("Vec Max : %lf\n",*max);
-mu = fabs(*max);
-//printf("\n mu = %lf",mu);
-tau =ceil(log2(mu));
-//printf("\n tau = %lf",tau);
-devSplitVector->Scaling=tau;
-//printf("\n devSplitVector ->Scaling = %lf\n ",devSplitVector->Scaling);
-tmp=(*max);
-sigma = pow(2,(rho+tau));
-//printf("\n sigma = %lf",sigma);
-
-    if(j<numRow){
-    d_only_TMPVec[j]=(double)(dev_Vector[j]+sigma);
-       __syncthreads();
-    d_only_TMPVec[j]=(double)(dev_Vector[j]-sigma);
-       __syncthreads();
-    //printf("\n d_only_TMPVec = %lf",d_only_TMPVec[j]);
-    //printf("\n dev_Vec = %lf",dev_Vector[j]);
-    dev_Vector[j] = ((dev_Vector[j]-d_only_TMPVec[j]));
-       __syncthreads();
-    devSplitVector->data[j]=(half)((double)((pow(2,(-1*tau)))*d_only_TMPVec[j]));
-       __syncthreads();
-        //printf("\n dev_Vec = %lf",dev_Vector[j]);
-        //for(int k = 0;k<numRow;k++){
-    //printf("\n  d_only_TMPVec>data[%d] = %f",k,(double)(d_only_TMPVec[k]));  
-    //printf("\n               devVector[%d] = %f",k,(double)(dev_Vector[k]));  
-     //printf("\n                      devSplitVector->data[%d] = %f",k,(half)(devSplitVector->data[k]));
-    // }
-    }
-    __syncthreads();
+dev_Mat2SplitMat<<< Grid, Block >>>(d_A,d_SplitMat,numCol,numRow,numSplitArray,TMP_MAT);
+  cudaDeviceSynchronize();
 
 
 }
@@ -1192,11 +1187,10 @@ sigma = pow(2,(rho+tau));
 
 void ozaki_Split_fp64tofp16_Vec(double *d_Vector,
  SplitVector  *d_SplitVec,int numRow,int numSplitArray,double *TMP_VEC  ){
-  //printf("\n in the Vec \n");
-dim3 Grid(numRow);
-dim3  Block(numRow);
+  dim3  Block(1,1);
+  dim3 Grid(1,1);
 
- if(4000 < numRow){
+ if(16 < numRow){
  if((numRow ) % BLOCK == 0){
  dim3  Block(BLOCK,BLOCK);
  dim3 Grid(int(numRow)/BLOCK,int(numRow)/BLOCK);
@@ -1207,25 +1201,10 @@ else{
 }
  }
 
-double *d_max;
-cudaMalloc((void**)&d_max, sizeof(double));
-double rho = ceil((log2(53)-log2(23)-log2(numSplitArray))/2);
-for(int i=0;i<numSplitArray;i++){
-Max_Sequential_Addressing_Shared<<<1, numRow,
-     numRow* sizeof(double)>>>(d_Vector,numRow,d_max);
-//printf("\n \n Max_Sequential_Addressing_Shared END \n");
-cudaDeviceSynchronize();
- //cudaMemcpy(&max, d_max, sizeof(double), cudaMemcpyDeviceToHost);
- //printf("\n in Vec max :%lf\n",max);
-dev_Vec2SplitVec<<<1, numRow,
-     numRow* sizeof(double)>>>(rho,d_max,d_Vector,&d_SplitVec[i],numRow , 
-numSplitArray,TMP_VEC);
-//printf("\n\n  dev_Vec2SplitVec EDN \n");
-cudaDeviceSynchronize();
 
-}
+dev_Vec2SplitVec<<< Block, Grid >>>(d_Vector,d_SplitVec,numRow , numSplitArray,TMP_VEC);
+    cudaDeviceSynchronize();
 
- 
 }
 
 
@@ -1239,149 +1218,12 @@ void ozaki_Split_fp64tofp16_VecPackMatrix( ){
 
 
 
-
-
-__global__ void dev_SumVector32to64( int UPS1,int UPS2,SplitMatrix  *d_SplitMat ,SplitVector  *d_SplitVec ,
-double *d_D,float *TMP_C,int numRow){
-
-  double Scaling = pow(2,d_SplitMat[UPS1].Scaling + d_SplitVec[UPS2].Scaling);
-
- int i = blockDim.x * blockIdx.x + threadIdx.x;
- 
-
-
-  printf("\nin sum C %lf",(double)TMP_C[i]);
-
-
-
- if(i < numRow){
-
-
-
-TMP_C[i] += 1;
-
-  __syncthreads();
-  //d_D[i] += (Scaling)*(double)(TMP_C[i]);
-  d_D[i] += (double)(TMP_C[i]);
- }
-__syncthreads();
-  printf("\nin sum D %d in C %lf",i,d_D[i]);
+void ozaki_fp16tofp64_sum(){
 
 
 }
 
-
-void ozaki_fp16tofp64_sum(cublasHandle_t cublasH, cublasOperation_t transa, cublasOperation_t transb,
- int m, int  n, double *alpha, double *d_A, int lda, double *d_B, int  ldb, double *beta,
-  double *d_D, int ldd,int numSplitArray,int numSplitArray2,SplitMatrix *SplitMat,
-  SplitVector *SplitVec,float *TMP_C,half *dataSMptr[],half *dataSVptr[]){
-
-numSplitArray2=numSplitArray;
-
-/*おそらくおっしゃっているcublasGemmExはozaki_fp16tofp64_sum内で
-呼んでいるものかと思いますが、引数に渡しているものが色々間違っているかと思います。
-関数のリファレンスはこちらで、関数の動作の説明の後に引数の説明（テーブル）があります。
-https://docs.nvidia.com/cuda/cublas/#cublasgemmex
-
-例えばalphaですが、ozaki_fp16tofp64_sumの引数ではdouble*ですので、
-cublasGemmExに&alphaと渡すと、double**が渡されます。
-しかし、リファレンスの説明によると、要求されているのはdouble*ですので、間違いです。
-void*はポインタなら何でも受け取りますので、今渡しているdouble** [=(double*)*]でも
-コンパイルエラーになりません。
-
-また、Aに渡されているdeviceメモリのポインタですが、ポインタ自体はホスト側にある必要が
-あります。
-main関数内でdevice上のSplitMatrix::dataなどにアドレスを転送していますが、
-そのSplitMatrix::dataにはホストからアクセスできないので、cublasGemmExの引数として
-は渡せません。*/
-
-SplitMatrix *d_SM;
-SplitVector *d_SV;
-
-
-
-half *A =nullptr;
-half *B=nullptr;
-
-
-
-
-    for(int i=0;i<numSplitArray;i++){
-        for(int j=0;j<numSplitArray2;j++){
-
-            printf("\nProblem 1 at %d %d\n",i,j);
-CUDA_CHECK(cudaMemcpy(A,dataSMptr[i],sizeof(half*),cudaMemcpyDeviceToHost));
-CUDA_CHECK(cudaMemcpy(B,dataSVptr[j] ,sizeof(half*),cudaMemcpyDeviceToHost));
-
-
-                 printf("\nProblem 2 st %d %d\n",i,j);
-
-
- CUBLAS_CHECK(cublasGemmEx(//16to32andtmpSegfo nannde
-      cublasH, transa, transb, m, n, 1, alpha, 
-       A, CUDA_R_16F, lda,
-       B,CUDA_R_16F, ldb,
-        beta, TMP_C, CUDA_R_32F, ldd,
-        CUBLAS_COMPUTE_32F_PEDANTIC, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-
-
-/*
-segfo  CUBLAS_CHECK(cublasGemmEx(//16to32andtmpSegfo nannde
-      cublasH, transa, transb, m, n, 1, alpha, 
-       SplitMat[i].data, CUDA_R_16F, lda,
-       SplitVec[j].data,CUDA_R_16F, ldb,
-        beta, TMP_C, CUDA_R_32F, ldd,
-        CUBLAS_COMPUTE_32F_PEDANTIC, CUBLAS_GEMM_DEFAULT_TENSOR_OP))
-
-ERR 13   CUBLAS_CHECK(cublasGemmEx(//16to32andtmpSegfo nannde
-      cublasH, transa, transb, m, n, 1, alpha, 
-       dataSMptr[i], CUDA_R_16F, lda,
-       dataSVptr[j],CUDA_R_16F, ldb,
-        beta, TMP_C, CUDA_R_32F, ldd,
-        CUBLAS_COMPUTE_32F_PEDANTIC, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-
-CUDA error 1 at GEMV.cu:1313
-CUDA_CHECK(cudaMemcpy(A,dataSMptr[i],sizeof(half*),cudaMemcpyDeviceToHost));
-CUDA_CHECK(cudaMemcpy(B,dataSVptr[j] ,sizeof(half*),cudaMemcpyDeviceToHost));
-
-
-                 printf("\nProblem 2 st %d %d\n",i,j);
-
-
- CUBLAS_CHECK(cublasGemmEx(//16to32andtmpSegfo nannde
-      cublasH, transa, transb, m, n, 1, alpha, 
-       A, CUDA_R_16F, lda,
-       B,CUDA_R_16F, ldb,
-        beta, TMP_C, CUDA_R_32F, ldd,
-        CUBLAS_COMPUTE_32F_PEDANTIC, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-
-*/
-      cudaDeviceSynchronize();
-
-                  printf("\nProblem 3 st %d %d\n",i,j);
-
-
-      dev_SumVector32to64<<<1, m*n,
-     m*n* sizeof(double)>>>(i,j,SplitMat,SplitVec,d_D,TMP_C,n );
-        cudaDeviceSynchronize();
-       
-                   printf("\nProblem 4 st %d %d\n",i,j);
-        }
-
-    }
-
-
-
-
-
-
-
-}
-
-void ozaki_fp16tofp64_sumPacked(cublasHandle_t cublasH, cublasOperation_t transa, cublasOperation_t transb,
- int m, int  n,int k, double *alpha, double *d_A, int lda, double *d_B, int  ldb, double *beta,
-  double *d_D, int ldd,int numSplitArray,SplitMatrix *SplitMat,double *TMP_MAT,
-  SplitVector *SplitVec,double *TMP_VEC,float *TMP_C){
+void ozaki_fp16tofp64_sumPacked(){
 
 
 }
@@ -1391,23 +1233,22 @@ void ozaki_fp16tofp64_sumPacked(cublasHandle_t cublasH, cublasOperation_t transa
 ///////////////////////////////////////////////////////////GEMV func//////////////////////////////////////////////////////////////////////////////////
 
 void ozakiDgemv64to16(cublasHandle_t cublasH, cublasOperation_t transa, cublasOperation_t transb,
- int m, int  n, double *alpha, double *d_A, int lda, double *d_B, int  ldb,
-  double *beta,
-  double *d_D, int ldd,int numSplitArray,int numSplitArray2,
-  SplitMatrix *SplitMat,double *TMP_MAT,
-  SplitVector *SplitVec,double *TMP_VEC,float *TMP_C,half *dataSMptr[],half *dataSVptr[]){
+ int m, int  n, double *alpha, double *d_A, int lda, double *d_B, int  ldb, double *beta,
+  double *d_D, int ldd,int numSplitArray,SplitMatrix *SplitMat,double *TMP_MAT,
+  SplitVector *SplitVec,double *TMP_VEC){
 
    
 
 
-ozaki_Split_fp64tofp16_Mat(d_A,SplitMat , m ,n,numSplitArray,TMP_MAT);
+ozaki_Split_fp64tofp16_Mat(d_A,SplitMat , m , n,numSplitArray,TMP_MAT);
 cudaDeviceSynchronize();
 ozaki_Split_fp64tofp16_Vec(d_B,SplitVec,n,numSplitArray,TMP_VEC);
 cudaDeviceSynchronize();
 
-ozaki_fp16tofp64_sum(cublasH,transa,transb,m,n,alpha,d_A,lda,d_B,ldb,beta,d_D,ldd,
-numSplitArray,numSplitArray2,SplitMat,SplitVec,TMP_C,dataSMptr,dataSVptr);
-cudaDeviceSynchronize();
+
+
+ozaki_fp16tofp64_sum();
+
 
 
 
@@ -1428,21 +1269,20 @@ cudaDeviceSynchronize();
 
 
 void ozakiDgemvNeo64to16(cublasHandle_t cublasH, cublasOperation_t transa, cublasOperation_t transb,
- int m, int  n, int k,double *alpha, double *d_A, int lda, double *d_B, int  ldb, double *beta,
-  double *d_D, int ldd,int numSplitArray,int numSplitArray2,SplitMatrix *SplitMat,double *TMP_MAT,
+ int m, int  n, double *alpha, double *d_A, int lda, double *d_B, int  ldb, double *beta,
+  double *d_D, int ldd,int numSplitArray,SplitMatrix *SplitMat,double *TMP_MAT,
   SplitVector *SplitVec,double *TMP_VEC){
 
 
 
 ozaki_Split_fp64tofp16_Mat(d_A,SplitMat , m , n,numSplitArray,TMP_MAT);
 
-//ozaki_Split_fp64tofp16_Vec(d_B,SplitVec,n,numSplitArray,TMP_VEC);
+ozaki_Split_fp64tofp16_Vec(d_B,SplitVec,n,numSplitArray,TMP_VEC);
 
 
 
 
-//ozaki_fp16tofp64_sumPacked(cublasH,transa,transb,m,n,1,alpha,d_A,lda,d_B,ldb,beta,d_D,ldd,
-//numSplitArray,numSplitArray2,*SplitMat,TMP_MAT,SplitVec,TMP_VEC);
+ozaki_fp16tofp64_sum();
 
 
 
@@ -1468,7 +1308,7 @@ class Particle
 __global__ void test(Particle *p){
 
   int idx=threadIdx.x + blockDim.x*blockIdx.x;
-  if(idx==0){
+  if(idx=0){
     printf("dev_p[2]._w[2] = %f\n", p[idx]._w[2]);
   }
   if (idx == 2){
@@ -1510,6 +1350,7 @@ int nParticles=100;
 
 
 ///////////////////////////////////////////////////////////main func//////////////////////////////////////////////////////////////////////////////////
+
 
 
 
@@ -1615,7 +1456,7 @@ const int ldbb = 1;
   double *d_D = nullptr;
 
   printf("Matrix size = %d * %d\n", m, m);
-//intf(" asdasdsad ");
+printf(" asdasdsad ");
 
 if(ShowM == 1){
 printf("\nMAtrix:A\n");
@@ -1798,39 +1639,31 @@ cublasHandle_t cublasHH;
 
  CUBLAS_CHECK(cublasCreate(&cublasHH));//初期化２SplitVector&SplitMat make
 
-int bunkatu2 = bunkatu;
 
 
 //test_host();
 
 
   double *TMP_MAT = nullptr;
+  CUDA_CHECK(cudaMalloc((void **)&TMP_MAT, sizeof(double) *m*n));
   double *TMP_VEC = nullptr;
-  float *TMP_C = nullptr;
+  CUDA_CHECK(cudaMalloc((void **) &TMP_VEC, sizeof(double) * n));
+
 
 SplitMatrix *d_SplitMat;
 SplitVector *d_SplitVec;
   half *dataMatPtr[bunkatu];//forSplitMAt
-  half *dataVecPtr[bunkatu2];
-
-
-
-  CUDA_CHECK(cudaMalloc((void **) (&TMP_VEC), sizeof(double) * n));
-  CUDA_CHECK(cudaMalloc((void **)(&TMP_MAT), sizeof(double) *m*n));
-  CUDA_CHECK(cudaMalloc((void **)(&TMP_C), sizeof(float) *n));
-  
-  
-  CUDA_CHECK(cudaMalloc((void**)(&d_SplitMat), bunkatu * sizeof(SplitMatrix)));
-  CUDA_CHECK(cudaMalloc((void**)(&d_SplitVec), bunkatu * sizeof(SplitVector)));
+  half *dataVecPtr[bunkatu];
+  CUDA_CHECK(cudaMalloc((void**)&d_SplitMat, bunkatu * sizeof(SplitMatrix)));
+  CUDA_CHECK(cudaMalloc((void**)&d_SplitVec, bunkatu * sizeof(SplitVector)));
 for( int i = 0; i < bunkatu; i++){
-    CUDA_CHECK(cudaMalloc((void**)(&dataMatPtr[i]), m*n * sizeof(half)));
-    CUDA_CHECK(cudaMalloc((void**)(&dataVecPtr[i]), n * sizeof(half)));
-    CUDA_CHECK(cudaMemcpy((&d_SplitMat[i].data), (&dataMatPtr[i]), 
-    sizeof(half *),cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy((&d_SplitVec[i].data), (&dataVecPtr[i]), 
-    sizeof(half *), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc((void**)&(dataMatPtr[i]), m*n * sizeof(half)));
+    CUDA_CHECK(cudaMalloc((void**)&(dataVecPtr[i]), n * sizeof(half)));
+    CUDA_CHECK(cudaMemcpy(&(d_SplitMat[i].data), &(dataMatPtr[i]), sizeof(half *),
+     cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(&(d_SplitVec[i].data), &(dataVecPtr[i]), sizeof(half *), 
+    cudaMemcpyHostToDevice));
     }
-  
 
 
 
@@ -1856,9 +1689,8 @@ for( int i = 0; i < bunkatu; i++){
   cudaEventRecord(start, NULL);
 
 
-
 ozakiDgemv64to16(cublasHH, transa, transb, m, n, &alpha4O , d_A, lda, d_B, ldb, &beta4O , d_D, ldd, 
-bunkatu,bunkatu2,d_SplitMat,TMP_MAT,d_SplitVec,TMP_VEC,TMP_C,dataMatPtr,dataVecPtr);
+bunkatu,d_SplitMat,TMP_MAT,d_SplitVec,TMP_VEC);
 
 
 
@@ -1882,7 +1714,7 @@ float millisecondsTD = 0;
   cudaEventCreate(&stop);
   cudaEventRecord(start, NULL);
 
-cudaMemcpy(D, d_D, sizeof(double) * n, cudaMemcpyDeviceToHost);
+cudaMemcpy(D, d_D, sizeof(double) * m, cudaMemcpyDeviceToHost);
  cudaDeviceSynchronize();
 
  cudaEventRecord(stop, NULL);
